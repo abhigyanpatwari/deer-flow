@@ -1,0 +1,16 @@
+# managed-by: gitnexus-hub
+name: GitNexus Checks
+on: pull_request
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitnexus/check@v1
+        with:
+          token: ${{ secrets.GITNEXUS_TOKEN }}
