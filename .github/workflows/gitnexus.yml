@@ -11,6 +11,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: Akon-Labs/gitnexus-enterprise/actions/check@staging
+      - uses: Akon-Labs/gitnexus-check@v1
         with:
           token: ${{ secrets.GITNEXUS_TOKEN }}
