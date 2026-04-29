@@ -1,0 +1,134 @@
+# GitNexus Claude Code Review workflow.
+#
+# Installed by the Hub's "Enable CI" flow alongside claude-workflow.yml.
+# Triggered explicitly via the `claude-review` label or by commenting
+# `@claude` / `/review` on a PR.
+#
+# Substitutions performed by the Hub before the file is pushed:
+#
+#   https://gitnexus-enterprise-staging.up.railway.app/mcp                 — full URL of the user's GitNexus Hub
+#                                    MCP endpoint, e.g.
+#                                    https://hub.gitnexus.io/mcp
+#   GITNEXUS_TOKEN   — name of the GitHub Actions secret
+#                                    holding the GitNexus API token (default
+#                                    GITNEXUS_TOKEN).
+#
+# Uses pull_request_target so the workflow runs as defined on the default
+# branch, which allows access to secrets for posting review comments on
+# fork PRs.
+# SECURITY: The checkout pins the fork's HEAD SHA (not the branch name) to
+# prevent TOCTOU races (force-push between trigger and checkout). The
+# claude-code-action sandboxes execution — it does NOT run arbitrary code
+# from the checked-out source.
+
+name: Claude Code Review
+
+on:
+  # Trigger only when explicitly requested:
+  #   - Add the "claude-review" label to a PR, OR
+  #   - Comment "@claude" or "/review" on a PR
+  pull_request_target:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+
+# Serialize per-PR to avoid racing review comments.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  claude-review:
+    # Run only when:
+    #   1. The "claude-review" label is added to a non-draft PR by a trusted contributor, OR
+    #   2. A trusted contributor comments "@claude" or "/review" on a PR
+    if: |
+      (
+        github.event_name == 'pull_request_target' &&
+        github.event.label.name == 'claude-review' &&
+        github.event.pull_request.draft == false &&
+        (github.event.pull_request.author_association == 'OWNER' ||
+         github.event.pull_request.author_association == 'MEMBER' ||
+         github.event.pull_request.author_association == 'COLLABORATOR')
+      ) ||
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        (contains(github.event.comment.body, '@claude') ||
+         contains(github.event.comment.body, '/review')) &&
+        (github.event.comment.author_association == 'OWNER' ||
+         github.event.comment.author_association == 'MEMBER' ||
+         github.event.comment.author_association == 'COLLABORATOR')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      id-token: write
+
+    steps:
+      # For issue_comment triggers, resolve the PR number, head SHA, and fork repo
+      - name: Resolve PR context
+        id: pr
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v7
+        with:
+          script: |
+            let pr;
+            if (context.eventName === 'issue_comment') {
+              const resp = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.payload.issue.number,
+              });
+              pr = resp.data;
+            } else {
+              pr = context.payload.pull_request;
+            }
+            core.setOutput('number', pr.number);
+            core.setOutput('sha', pr.head.sha);
+            core.setOutput('repo', pr.head.repo.full_name);
+            core.setOutput('branch', pr.head.ref);
+
+      - name: Checkout PR head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ steps.pr.outputs.repo }}
+          ref: ${{ steps.pr.outputs.sha }}
+          fetch-depth: 1
+
+      # Write the GitNexus MCP config to disk so we can pass it to Claude Code
+      # via --mcp-config. claude-code-action does not have a top-level
+      # mcp_config input — the supported path is `claude_args` with one or
+      # more --mcp-config flags. See:
+      # https://github.com/anthropics/claude-code-action/blob/main/docs/configuration.md
+      - name: Write GitNexus MCP config
+        run: |
+          mkdir -p .claude
+          cat > .claude/gitnexus-mcp.json <<'EOF'
+          {
+            "mcpServers": {
+              "gitnexus": {
+                "type": "http",
+                "url": "https://gitnexus-enterprise-staging.up.railway.app/mcp",
+                "headers": {
+                  "Authorization": "Bearer ${{ secrets.GITNEXUS_TOKEN }}"
+                }
+              }
+            }
+          }
+          EOF
+
+      - name: Run Claude Code Review
+        id: claude-review
+        uses: anthropics/claude-code-action@9469d113c6afd29550c402740f22d1a97dd1209b # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_non_write_users: '*'
+          show_full_output: true
+          plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
+          plugins: 'code-review@claude-code-plugins'
+          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ steps.pr.outputs.number }}'
+          claude_args: --mcp-config .claude/gitnexus-mcp.json
