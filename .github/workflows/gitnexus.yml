@@ -1,4 +1,4 @@
-# managed-by: gitnexus-hub
+# managed-by: gitnexus-cli
 name: GitNexus Checks
 on: pull_request
 permissions:
