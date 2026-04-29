@@ -13,4 +13,5 @@ jobs:
           fetch-depth: 0
       - uses: Akon-Labs/gitnexus-check@v1
         with:
+          hub-url: https://gitnexus-enterprise-staging.up.railway.app
           token: ${{ secrets.GITNEXUS_TOKEN }}
