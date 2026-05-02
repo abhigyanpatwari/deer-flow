@@ -41,6 +41,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           allowed_non_write_users: '*'
           show_full_output: true
+          track_progress: true
           claude_args: --mcp-config ${{ steps.prep.outputs.mcp-config-path }} --append-system-prompt-file ${{ steps.prep.outputs.system-prompt-path }}
           prompt: |
             Review pull request #${{ github.event.pull_request.number }} of ${{ github.repository }}.
