@@ -1,17 +1,61 @@
 # managed-by: gitnexus-cli
-name: GitNexus Checks
-on: pull_request
+name: GitNexus PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+
 permissions:
   contents: read
   pull-requests: write
+  issues: read
+  id-token: write
+
+concurrency:
+  group: gitnexus-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
 jobs:
-  check:
+  review:
+    if: ${{ github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'gitnexus-draft-review') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout PR head
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: Akon-Labs/gitnexus-check@v1
+
+      - name: GitNexus prep — context pack + MCP config
+        id: prep
+        uses: Akon-Labs/gitnexus-check@v2
         with:
           hub-url: https://gitnexus-enterprise-staging.up.railway.app
           token: ${{ secrets.GITNEXUS_TOKEN }}
+          deep-review-label: gitnexus-deep-review
+
+      - name: Claude review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_non_write_users: '*'
+          show_full_output: true
+          claude_args: --mcp-config ${{ steps.prep.outputs.mcp-config-path }} --append-system-prompt-file ${{ steps.prep.outputs.system-prompt-path }}
+          prompt: |
+            Review pull request #${{ github.event.pull_request.number }} of ${{ github.repository }}.
+
+            A pre-computed Context Pack from GitNexus is at:
+              ${{ steps.prep.outputs.context-pack-path }}
+
+            Read it FIRST. It tells you the system architecture relevant to
+            this PR — changed symbols, their callers and processes, group
+            siblings, cross-repo consumers, and any architectural boundary
+            crossings.
+
+            Use the GitNexus MCP server (configured) for ad-hoc deeper
+            questions — but the Context Pack should be enough for most.
+
+            Post one PR comment summarising your review. Lead with the
+            single most important finding. Use the cross-repo signal
+            heavily when it's available — that's our moat.
